@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HabiGrid — Habit Tracker</title>
+<meta name="description" content="A minimal, professional habit tracker with heatmap, streaks, and weekly charts."/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#ffffff;
+  --surface:#f9f9f8;
+  --border:#e5e5e3;
+  --accent:#2563eb;
+  --text:#111110;
+  --muted:#888784;
+  --h0:#f0eeea;
+  --h1:#bfdbfe;
+  --h2:#93c5fd;
+  --h3:#3b82f6;
+  --h4:#2563eb;
+  --radius:12px;
+  --font:'DM Sans',sans-serif;
+}
+html,body,#root{height:100%;background:var(--bg);font-family:var(--font);color:var(--text)}
+body{font-size:13px;font-weight:400;line-height:1.5}
+.app{display:flex;flex-direction:column;min-height:100vh}
+.topbar{padding:16px 32px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;gap:8px}
+.topbar h1{font-size:15px;font-weight:500;letter-spacing:-0.01em}
+.topbar span{font-size:13px;color:var(--muted)}
+.layout{display:flex;flex:1;overflow:hidden}
+.sidebar{width:220px;min-width:220px;border-right:0.5px solid var(--border);padding:24px 16px;display:flex;flex-direction:column;gap:16px;overflow-y:auto}
+.sidebar-label{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px}
+.habit-list{display:flex;flex-direction:column;gap:4px}
+.habit-row{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;transition:background 150ms ease;user-select:none}
+.habit-row:hover{background:var(--surface)}
+.habit-row.checked .habit-name{color:var(--accent)}
+.cb{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 150ms ease,border-color 150ms ease}
+.cb.on{background:var(--accent);border-color:var(--accent)}
+.cb svg{display:block}
+.habit-emoji{font-size:14px;line-height:1}
+.habit-name{font-size:13px;font-weight:400;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.del-btn{opacity:0;background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;padding:2px 4px;border-radius:4px;transition:opacity 150ms ease}
+.habit-row:hover .del-btn{opacity:1}
+.add-form{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.add-form input{font-family:var(--font);font-size:13px;padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;outline:none;background:var(--bg);color:var(--text);transition:border-color 150ms ease}
+.add-form input:focus{border-color:var(--accent)}
+.add-form input::placeholder{color:var(--muted)}
+.emoji-row{display:flex;gap:6px;flex-wrap:wrap}
+.emoji-opt{font-size:16px;cursor:pointer;padding:4px;border-radius:6px;border:1.5px solid transparent;transition:border-color 150ms ease}
+.emoji-opt.sel{border-color:var(--accent)}
+.add-btn{font-family:var(--font);font-size:13px;font-weight:500;padding:8px 12px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;transition:opacity 150ms ease}
+.add-btn:hover{opacity:.88}
+.main{flex:1;padding:28px 32px;display:flex;flex-direction:column;gap:24px;overflow-y:auto}
+.card{background:var(--bg);border:0.5px solid var(--border);border-radius:var(--radius);padding:20px 24px}
+.section-label{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.heatmap-wrap{overflow-x:auto}
+.heatmap-wrap svg text{font-family:var(--font)}
+.stats-row{display:flex;gap:16px}
+.stat-card{flex:1;background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:16px 20px}
+.stat-val{font-size:22px;font-weight:500;color:var(--text)}
+.stat-lbl{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:4px}
+.chart-wrap svg text{font-family:var(--font)}
+.tooltip{position:fixed;background:#111110;color:#fff;font-family:var(--font);font-size:11px;padding:5px 9px;border-radius:6px;pointer-events:none;opacity:0;transition:opacity 100ms ease;white-space:nowrap;z-index:999}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="tooltip" id="tt"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useMemo}=React;
+
+/* ── helpers ── */
+const fmt=d=>d.toISOString().slice(0,10);
+const today=()=>fmt(new Date());
+const addDays=(d,n)=>{const r=new Date(d);r.setDate(r.getDate()+n);return r};
+const startOfWeek=d=>{const r=new Date(d);const day=r.getDay();const diff=day===0?-6:1-day;r.setDate(r.getDate()+diff);return r};
+
+function seedHistory(habits){
+  const comp={};
+  const now=new Date();
+  habits.forEach(h=>{
+    comp[h.id]={};
+    for(let i=180;i>=1;i--){
+      const d=addDays(now,-i);
+      if(Math.random()<0.65) comp[h.id][fmt(d)]=true;
+    }
+  });
+  return comp;
+}
+
+const EMOJIS=['🏃','📖','🧘','💧','🎨','🎸','🏋️','🌿','✍️','🍎'];
+
+const DEFAULT_HABITS=[
+  {id:'h1',name:'Exercise',emoji:'🏃'},
+  {id:'h2',name:'Read',emoji:'📖'},
+  {id:'h3',name:'Meditate',emoji:'🧘'},
+];
+
+/* ── Checkbox ── */
+function CB({on}){
+  return(
+    <div className={`cb${on?' on':''}`}>
+      {on&&<svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+        <path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>}
+    </div>
+  );
+}
+
+/* ── Heatmap ── */
+function Heatmap({habits,completions}){
+  const ref=useRef();
+  const tt=document.getElementById('tt');
+
+  const data=useMemo(()=>{
+    const end=new Date();
+    end.setHours(0,0,0,0);
+    const startSun=new Date(end);
+    startSun.setDate(startSun.getDate()-startSun.getDay()-7*51);
+    const days=[];
+    let cur=new Date(startSun);
+    while(cur<=end){
+      const key=fmt(cur);
+      let count=0;
+      habits.forEach(h=>{if(completions[h.id]&&completions[h.id][key])count++;});
+      days.push({date:new Date(cur),key,count,total:habits.length});
+      cur=addDays(cur,1);
+    }
+    return days;
+  },[habits,completions]);
+
+  useEffect(()=>{
+    const sw=11,gap=3,cell=sw;
+    const cols=Math.ceil(data.length/7);
+    const mleft=28,mtop=22;
+    const W=mleft+cols*(cell+gap)+gap;
+    const H=mtop+7*(cell+gap)+gap+4;
+
+    d3.select(ref.current).selectAll('*').remove();
+    const svg=d3.select(ref.current)
+      .attr('width',W).attr('height',H);
+
+    const weeks=d3.group(data,d=>{
+      const ms=startOfWeek(d.date);
+      return fmt(ms);
+    });
+    const weekKeys=[...weeks.keys()].sort();
+
+    const colorScale=d=>
+      d.total===0?'var(--h0)':
+      d.count===0?'var(--h0)':
+      d.count/d.total<0.25?'var(--h1)':
+      d.count/d.total<0.5?'var(--h2)':
+      d.count/d.total<0.75?'var(--h3)':'var(--h4)';
+
+    /* day labels */
+    ['Mon','','Wed','','Fri','',''].forEach((lbl,i)=>{
+      if(!lbl)return;
+      svg.append('text').attr('x',mleft-6).attr('y',mtop+i*(cell+gap)+cell/2+4)
+        .attr('text-anchor','end').attr('font-size',9).attr('fill','var(--muted)').text(lbl);
+    });
+
+    /* month labels */
+    let lastMonth=-1;
+    weekKeys.forEach((wk,wi)=>{
+      const firstDay=weeks.get(wk)[0].date;
+      const m=firstDay.getMonth();
+      if(m!==lastMonth){
+        lastMonth=m;
+        svg.append('text').attr('x',mleft+wi*(cell+gap)).attr('y',mtop-6)
+          .attr('font-size',9).attr('fill','var(--muted)')
+          .text(firstDay.toLocaleString('default',{month:'short'}));
+      }
+    });
+
+    /* cells */
+    const todayKey=today();
+    weekKeys.forEach((wk,wi)=>{
+      const days=weeks.get(wk);
+      days.forEach(d=>{
+        const dow=(d.date.getDay()+6)%7; // Mon=0
+        const x=mleft+wi*(cell+gap);
+        const y=mtop+dow*(cell+gap);
+        const rect=svg.append('rect')
+          .attr('x',x).attr('y',y)
+          .attr('width',cell).attr('height',cell)
+          .attr('rx',2).attr('ry',2)
+          .attr('fill',colorScale(d))
+          .style('cursor','default');
+        if(d.key===todayKey){
+          rect.attr('stroke','var(--accent)').attr('stroke-width',1.5);
+        }
+        rect.on('mousemove',e=>{
+          const dstr=d.date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+          const status=d.count===0?'No completions':`${d.count}/${d.total} completed`;
+          tt.textContent=`${dstr} · ${status}`;
+          tt.style.opacity='1';
+          tt.style.left=(e.clientX+12)+'px';
+          tt.style.top=(e.clientY-28)+'px';
+        }).on('mouseleave',()=>{tt.style.opacity='0'});
+      });
+    });
+  },[data]);
+
+  return <div className="heatmap-wrap"><svg ref={ref}/></div>;
+}
+
+/* ── Bar Chart ── */
+function BarChart({habits,completions}){
+  const ref=useRef();
+  const tt=document.getElementById('tt');
+
+  const weeks=useMemo(()=>{
+    const end=new Date();end.setHours(0,0,0,0);
+    const arr=[];
+    for(let w=7;w>=0;w--){
+      const wStart=addDays(end,-(end.getDay()+6)%7-w*7);
+      let count=0;
+      for(let d=0;d<7;d++){
+        const k=fmt(addDays(wStart,d));
+        habits.forEach(h=>{if(completions[h.id]&&completions[h.id][k])count++;});
+      }
+      arr.push({label:wStart.toLocaleDateString('en-US',{month:'short',day:'numeric'}),count,wStart});
+    }
+    return arr;
+  },[habits,completions]);
+
+  useEffect(()=>{
+    const W=560,H=160;
+    const ml=28,mr=8,mt=8,mb=28;
+    const iW=W-ml-mr,iH=H-mt-mb;
+    d3.select(ref.current).selectAll('*').remove();
+    const svg=d3.select(ref.current).attr('width','100%').attr('viewBox',`0 0 ${W} ${H}`);
+    const g=svg.append('g').attr('transform',`translate(${ml},${mt})`);
+
+    const x=d3.scaleBand().domain(weeks.map(d=>d.label)).range([0,iW]).padding(0.35);
+    const y=d3.scaleLinear().domain([0,d3.max(weeks,d=>d.count)||1]).nice().range([iH,0]);
+
+    /* axes */
+    g.append('g').attr('transform',`translate(0,${iH})`)
+      .call(d3.axisBottom(x).tickSize(0))
+      .call(ax=>{ax.select('.domain').remove();ax.selectAll('text').attr('font-size',9).attr('fill','var(--muted)').attr('font-family','var(--font)');});
+    g.append('g')
+      .call(d3.axisLeft(y).ticks(4).tickSize(-iW))
+      .call(ax=>{ax.select('.domain').remove();
+        ax.selectAll('.tick line').attr('stroke','var(--border)').attr('stroke-dasharray','2,2');
+        ax.selectAll('text').attr('font-size',9).attr('fill','var(--muted)').attr('font-family','var(--font)');});
+
+    /* bars */
+    g.selectAll('rect').data(weeks).join('rect')
+      .attr('x',d=>x(d.label))
+      .attr('width',x.bandwidth())
+      .attr('y',iH).attr('height',0)
+      .attr('rx',3).attr('fill','var(--accent)')
+      .transition().duration(500).delay((_,i)=>i*40)
+      .attr('y',d=>y(d.count))
+      .attr('height',d=>iH-y(d.count));
+
+    /* hover */
+    g.selectAll('rect').on('mousemove',function(e,d){
+      tt.textContent=`Week of ${d.label}: ${d.count} completions`;
+      tt.style.opacity='1';tt.style.left=(e.clientX+12)+'px';tt.style.top=(e.clientY-28)+'px';
+    }).on('mouseleave',()=>{tt.style.opacity='0'});
+  },[weeks]);
+
+  return <div className="chart-wrap"><svg ref={ref} style={{width:'100%',display:'block'}}/></div>;
+}
+
+/* ── Streaks ── */
+function calcStreaks(habits,completions){
+  const allChecked=key=>habits.length>0&&habits.every(h=>completions[h.id]&&completions[h.id][key]);
+  const end=new Date();end.setHours(0,0,0,0);
+  let cur=0,longest=0,run=0,total=0;
+  // total completions
+  habits.forEach(h=>{if(completions[h.id])total+=Object.values(completions[h.id]).filter(Boolean).length;});
+  // current streak — walk back from yesterday (today counts if all done)
+  const todayKey=fmt(end);
+  const todayDone=allChecked(todayKey);
+  let i=todayDone?0:1;
+  while(true){
+    const k=fmt(addDays(end,-i));
+    if(allChecked(k)){cur++;i++;}else break;
+    if(i>400)break;
+  }
+  // longest streak
+  for(let j=0;j<=365;j++){
+    const k=fmt(addDays(end,-j));
+    if(allChecked(k)){run++;}else{if(run>longest)longest=run;run=0;}
+  }
+  if(run>longest)longest=run;
+  return{cur,longest,total};
+}
+
+/* ── localStorage helpers ── */
+const LS_HABITS='habitgrid_habits';
+const LS_COMP='habitgrid_completions';
+function loadHabits(){
+  try{const s=localStorage.getItem(LS_HABITS);if(s)return JSON.parse(s);}catch(e){}
+  return null;
+}
+function loadCompletions(){
+  try{const s=localStorage.getItem(LS_COMP);if(s)return JSON.parse(s);}catch(e){}
+  return null;
+}
+
+/* ── App ── */
+function App(){
+  const [habits,setHabits]=useState(()=>loadHabits()||DEFAULT_HABITS);
+  const [completions,setCompletions]=useState(()=>{
+    const saved=loadCompletions();
+    if(saved)return saved;
+    // First visit — seed so heatmap looks populated
+    return seedHistory(DEFAULT_HABITS);
+  });
+  const [newName,setNewName]=useState('');
+  const [newEmoji,setNewEmoji]=useState('🏃');
+  const todayKey=today();
+
+  // Persist habits whenever they change
+  useEffect(()=>{
+    try{localStorage.setItem(LS_HABITS,JSON.stringify(habits));}catch(e){}
+  },[habits]);
+
+  // Persist completions whenever they change
+  useEffect(()=>{
+    try{localStorage.setItem(LS_COMP,JSON.stringify(completions));}catch(e){}
+  },[completions]);
+
+  const toggle=hid=>{
+    setCompletions(prev=>({
+      ...prev,
+      [hid]:{...prev[hid],[todayKey]:!prev[hid]?.[todayKey]}
+    }));
+  };
+
+  const addHabit=()=>{
+    if(!newName.trim())return;
+    const id='h'+Date.now();
+    const h={id,name:newName.trim(),emoji:newEmoji};
+    setHabits(p=>[...p,h]);
+    setCompletions(p=>({...p,[id]:{}}));
+    setNewName('');
+  };
+
+  const delHabit=id=>{
+    setHabits(p=>p.filter(h=>h.id!==id));
+    setCompletions(p=>{const n={...p};delete n[id];return n;});
+  };
+
+  const {cur,longest,total}=useMemo(()=>calcStreaks(habits,completions),[habits,completions]);
+
+  return(
+    <div className="app">
+      <div className="topbar">
+        <h1>HabiGrid</h1>
+        <span>·</span>
+        <span>{new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</span>
+      </div>
+      <div className="layout">
+        {/* Sidebar */}
+        <div className="sidebar">
+          <div>
+            <div className="sidebar-label">Today's Habits</div>
+            <div className="habit-list">
+              {habits.map(h=>{
+                const on=!!(completions[h.id]&&completions[h.id][todayKey]);
+                return(
+                  <div key={h.id} className={`habit-row${on?' checked':''}`} onClick={()=>toggle(h.id)}>
+                    <CB on={on}/>
+                    <span className="habit-emoji">{h.emoji}</span>
+                    <span className="habit-name">{h.name}</span>
+                    <button className="del-btn" onClick={e=>{e.stopPropagation();delHabit(h.id)}} title="Delete">×</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <div className="sidebar-label">Add Habit</div>
+            <div className="add-form">
+              <div className="emoji-row">
+                {EMOJIS.map(em=>(
+                  <span key={em} className={`emoji-opt${newEmoji===em?' sel':''}`} onClick={()=>setNewEmoji(em)}>{em}</span>
+                ))}
+              </div>
+              <input
+                placeholder="Habit name…"
+                value={newName}
+                onChange={e=>setNewName(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&addHabit()}
+              />
+              <button className="add-btn" onClick={addHabit}>+ Add Habit</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Main */}
+        <div className="main">
+          {/* Heatmap */}
+          <div className="card">
+            <div className="section-label">Contribution Heatmap</div>
+            <Heatmap habits={habits} completions={completions}/>
+          </div>
+
+          {/* Stats */}
+          <div className="stats-row">
+            <div className="stat-card">
+              <div className="stat-val">{cur}</div>
+              <div className="stat-lbl">Current Streak</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-val">{longest}</div>
+              <div className="stat-lbl">Longest Streak</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-val">{total}</div>
+              <div className="stat-lbl">Total Completions</div>
+            </div>
+          </div>
+
+          {/* Bar Chart */}
+          <div className="card">
+            <div className="section-label">Weekly Completions — Last 8 Weeks</div>
+            <BarChart habits={habits} completions={completions}/>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
